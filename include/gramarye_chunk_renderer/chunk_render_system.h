@@ -64,10 +64,16 @@ void ChunkRenderSystem_remove_entity_observer(ChunkRenderSystem* system, EntityI
 // Remove a manual observer at specific tile coordinates
 void ChunkRenderSystem_remove_manual_observer(ChunkRenderSystem* system, int tileX, int tileY);
 
+// Forward declaration
+typedef struct ChunkManagerSystem ChunkManagerSystem;
+
 // Update chunk loading/unloading based on observers
+// If chunkManager is provided, it will be used to check for dirty chunks
+// and dirty flags will be cleared after rendering
 void ChunkRenderSystem_update(ChunkRenderSystem* system, 
                               ECS* ecs,
-                              ComponentTypeId positionTypeId);
+                              ComponentTypeId positionTypeId,
+                              ChunkManagerSystem* chunkManager);
 
 // Render visible chunks
 void ChunkRenderSystem_render(ChunkRenderSystem* system,
@@ -96,6 +102,8 @@ bool ChunkRenderSystem_handle_click(ChunkRenderSystem* system,
                                     int* outTileY);
 
 // Mark a chunk as dirty (needs re-rendering)
+// NOTE: This is deprecated - use ChunkManagerSystem_mark_chunk_dirty instead
+// Kept for backwards compatibility but should not be used in new code
 void ChunkRenderSystem_mark_chunk_dirty(ChunkRenderSystem* system, int tileX, int tileY);
 
 // Cleanup resources

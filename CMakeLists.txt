@@ -137,6 +137,15 @@ target_link_libraries(gramarye-chunk-renderer PUBLIC
     gramarye-renderer-interface
 )
 
+# Optional dependency on chunk-controller (for ChunkManagerSystem integration)
+# This is optional - chunk-renderer can work without it, but will have limited functionality
+if(TARGET gramarye-chunk-controller)
+    # Add include directory so we can optionally include chunk_manager_system.h
+    target_include_directories(gramarye-chunk-renderer PRIVATE
+        $<TARGET_PROPERTY:gramarye-chunk-controller,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+endif()
+
 # Explicitly propagate include directories from dependencies
 # This ensures headers are available even if automatic propagation has issues
 get_target_property(COMPONENT_FUNCTIONS_INCLUDES gramarye-component-functions INTERFACE_INCLUDE_DIRECTORIES)

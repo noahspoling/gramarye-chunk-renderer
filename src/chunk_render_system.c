@@ -1,21 +1,28 @@
 #include "gramarye_chunk_renderer/chunk_render_system.h"
-// Note: Include full API headers from gramarye-component-functions
-// The include path order ensures component-functions headers come first
-#include "core/position.h"  // Position_get ECS function (includes struct)
-#include "textures/atlas.h"  // Atlas_getRect (full API with raylib types)
-#include "tilemap/tilemap.h"  // Tilemap_get_tile
-#include "tilemap/chunk_render_data.h"  // ChunkRenderData
-#include "tilemap/chunk_observer.h"  // Observer
-// Note: raylib.h is included transitively through textures/atlas.h
-// We use Rectangle and Texture2D types from the Atlas API, but all rendering
-// is done through the renderer interface, not direct raylib calls
+#include "core/position.h"
+#include "textures/atlas.h"
+#include "tilemap/tilemap.h"
+#include "tilemap/chunk_render_data.h"
+#include "tilemap/chunk_observer.h"
+#ifdef __has_include
+    #if __has_include("gramarye_chunk_controller/chunk_manager_system.h")
+        #include "gramarye_chunk_controller/chunk_manager_system.h"
+        #define HAS_CHUNK_MANAGER 1
+    #endif
+#endif
 #include <math.h>
 #include <string.h>
 
-// Note: camera.h must be included by the caller before calling render/handle_click functions
-// We use forward declarations here to avoid creating a hard dependency on game-specific code
+#ifndef HAS_CHUNK_MANAGER
+static inline bool ChunkManagerSystem_is_chunk_dirty(ChunkManagerSystem* system, int chunkX, int chunkY) {
+    (void)system; (void)chunkX; (void)chunkY;
+    return false;
+}
+static inline void ChunkManagerSystem_clear_dirty(ChunkManagerSystem* system) {
+    (void)system;
+}
+#endif
 
-// Helper: Convert raylib Rectangle to RenderRect
 static RenderRect rect_from_raylib_rectangle(Rectangle r) {
     RenderRect result;
     result.x = r.x;
@@ -25,21 +32,17 @@ static RenderRect rect_from_raylib_rectangle(Rectangle r) {
     return result;
 }
 
-// Helper: Get white color
 static RenderColor color_white(void) {
     RenderColor c = {255, 255, 255, 255};
     return c;
 }
 
-// Helper: Get black color
 static RenderColor color_black(void) {
     RenderColor c = {0, 0, 0, 255};
     return c;
 }
 
-// Helper: Get chunk coordinates from tile coordinates
 static void get_chunk_coord(ChunkRenderSystem* system, int tileX, int tileY, int* outChunkX, int* outChunkY) {
-    // Handle negative coordinates correctly (floor division)
     if (tileX >= 0) {
         *outChunkX = tileX / system->chunkSize;
     } else {
@@ -52,7 +55,6 @@ static void get_chunk_coord(ChunkRenderSystem* system, int tileX, int tileY, int
     }
 }
 
-// Helper: Get local tile coordinates within chunk
 static void get_local_coord(ChunkRenderSystem* system, int tileX, int tileY, int* outLocalX, int* outLocalY) {
     int chunkX, chunkY;
     get_chunk_coord(system, tileX, tileY, &chunkX, &chunkY);
@@ -60,7 +62,6 @@ static void get_local_coord(ChunkRenderSystem* system, int tileX, int tileY, int
     *outLocalY = tileY - (chunkY * system->chunkSize);
 }
 
-// Helper: Get or create chunk render data
 static ChunkRenderData* get_or_create_chunk(ChunkRenderSystem* system, int chunkX, int chunkY) {
     IntCoord coord = {chunkX, chunkY};
     ChunkRenderData* chunk = (ChunkRenderData*)Table_get(system->chunks, &coord);
@@ -73,7 +74,6 @@ static ChunkRenderData* get_or_create_chunk(ChunkRenderSystem* system, int chunk
         chunk->isLoaded = false;
         chunk->lastUpdateFrame = 0;
         
-        // Create render texture for chunk using renderer interface
         int chunkPixelSize = system->chunkSize * system->tileSize;
         if (system->renderer) {
             chunk->renderTexture = Renderer_create_render_texture(system->renderer, chunkPixelSize, chunkPixelSize);
@@ -90,13 +90,11 @@ static ChunkRenderData* get_or_create_chunk(ChunkRenderSystem* system, int chunk
     return chunk;
 }
 
-// Helper: Render a chunk's tiles to its render texture
 static void render_chunk_tiles(ChunkRenderSystem* system, ChunkRenderData* chunk) {
     if (!chunk || !system->tilemap || !system->atlas || !system->renderer || !chunk->renderTexture) return;
     
     Renderer_begin_render_texture(system->renderer, chunk->renderTexture);
     
-    // Clear background using renderer interface
     int chunkPixelSize = system->chunkSize * system->tileSize;
     RenderCommand clearCmd = {
         .type = RENDER_COMMAND_TYPE_RECTANGLE,
@@ -115,11 +113,9 @@ static void render_chunk_tiles(ChunkRenderSystem* system, ChunkRenderData* chunk
             
             Tile* tile = Tilemap_get_tile(system->tilemap, tileX, tileY);
             if (tile) {
-                // Get source rectangle from Atlas (returns raylib Rectangle)
                 Rectangle sourceRectRaylib = Atlas_getRect(system->atlas, tile->tile_id);
                 RenderRect sourceRect = rect_from_raylib_rectangle(sourceRectRaylib);
                 
-                // Create destination rectangle
                 RenderRect destRect = {
                     (float)(localX * system->tileSize),
                     (float)(localY * system->tileSize),
@@ -127,13 +123,12 @@ static void render_chunk_tiles(ChunkRenderSystem* system, ChunkRenderData* chunk
                     (float)system->tileSize
                 };
                 
-                // Create render command for texture
                 RenderCommand texCmd = {
                     .type = RENDER_COMMAND_TYPE_TEXTURE,
                     .bounds = destRect,
                     .color = color_white(),
                     .data.texture = {
-                        .textureHandle = &system->atlas->texture,  // void* handle (Texture2D*)
+                        .textureHandle = &system->atlas->texture,
                         .srcRect = sourceRect,
                         .rotation = 0.0f,
                         .origin = {0, 0}
@@ -150,7 +145,6 @@ static void render_chunk_tiles(ChunkRenderSystem* system, ChunkRenderData* chunk
     chunk->lastUpdateFrame = system->currentFrame;
 }
 
-// Helper: Get observer tile position
 static void get_observer_tile_pos(ChunkRenderSystem* system, 
                                    Observer* observer,
                                    ECS* ecs,
@@ -200,16 +194,14 @@ void ChunkRenderSystem_add_entity_observer(ChunkRenderSystem* system,
                                            ECS* ecs,
                                            EntityId entity,
                                            ComponentTypeId positionTypeId) {
-    // Check if observer already exists
     for (size_t i = 0; i < system->observerCount; i++) {
         if (system->observers[i].type == OBSERVER_ENTITY && 
             system->observers[i].data.entityId.high == entity.high &&
             system->observers[i].data.entityId.low == entity.low) {
-            return; // Already exists
+            return;
         }
     }
     
-    // Resize if needed
     if (system->observerCount >= system->observerCapacity) {
         size_t newCapacity = system->observerCapacity * 2;
         Observer* newObservers = (Observer*)Arena_alloc(system->arena, sizeof(Observer) * newCapacity, __FILE__, __LINE__);
@@ -224,16 +216,14 @@ void ChunkRenderSystem_add_entity_observer(ChunkRenderSystem* system,
 }
 
 void ChunkRenderSystem_add_manual_observer(ChunkRenderSystem* system, int tileX, int tileY) {
-    // Check if observer already exists
     for (size_t i = 0; i < system->observerCount; i++) {
         if (system->observers[i].type == OBSERVER_MANUAL &&
             system->observers[i].data.manual.tileX == tileX &&
             system->observers[i].data.manual.tileY == tileY) {
-            return; // Already exists
+            return;
         }
     }
     
-    // Resize if needed
     if (system->observerCount >= system->observerCapacity) {
         size_t newCapacity = system->observerCapacity * 2;
         Observer* newObservers = (Observer*)Arena_alloc(system->arena, sizeof(Observer) * newCapacity, __FILE__, __LINE__);
@@ -253,7 +243,6 @@ void ChunkRenderSystem_remove_entity_observer(ChunkRenderSystem* system, EntityI
         if (system->observers[i].type == OBSERVER_ENTITY &&
             system->observers[i].data.entityId.high == entity.high &&
             system->observers[i].data.entityId.low == entity.low) {
-            // Remove by swapping with last
             system->observers[i] = system->observers[system->observerCount - 1];
             system->observerCount--;
             return;
@@ -266,7 +255,6 @@ void ChunkRenderSystem_remove_manual_observer(ChunkRenderSystem* system, int til
         if (system->observers[i].type == OBSERVER_MANUAL &&
             system->observers[i].data.manual.tileX == tileX &&
             system->observers[i].data.manual.tileY == tileY) {
-            // Remove by swapping with last
             system->observers[i] = system->observers[system->observerCount - 1];
             system->observerCount--;
             return;
@@ -276,14 +264,10 @@ void ChunkRenderSystem_remove_manual_observer(ChunkRenderSystem* system, int til
 
 void ChunkRenderSystem_update(ChunkRenderSystem* system,
                                ECS* ecs,
-                               ComponentTypeId positionTypeId) {
+                               ComponentTypeId positionTypeId,
+                               ChunkManagerSystem* chunkManager) {
     system->currentFrame++;
     
-    // Collect chunks that should be loaded (render radius)
-    // and chunks that should be simulated (simulation radius)
-    // For now, we'll just ensure chunks in render radius are loaded
-    
-    // Mark chunks that should be visible based on observers
     for (size_t i = 0; i < system->observerCount; i++) {
         int observerTileX, observerTileY;
         get_observer_tile_pos(system, &system->observers[i], ecs, positionTypeId, &observerTileX, &observerTileY);
@@ -291,26 +275,44 @@ void ChunkRenderSystem_update(ChunkRenderSystem* system,
         int observerChunkX, observerChunkY;
         get_chunk_coord(system, observerTileX, observerTileY, &observerChunkX, &observerChunkY);
         
-        // Load chunks in render radius
         for (int dy = -system->renderRadius; dy <= system->renderRadius; dy++) {
             for (int dx = -system->renderRadius; dx <= system->renderRadius; dx++) {
                 int chunkX = observerChunkX + dx;
                 int chunkY = observerChunkY + dy;
                 
-                // Check if within render radius (circular check)
                 float dist = sqrtf((float)(dx * dx + dy * dy));
                 if (dist <= (float)system->renderRadius) {
                     ChunkRenderData* chunk = get_or_create_chunk(system, chunkX, chunkY);
-                    if (chunk->isDirty || !chunk->isLoaded) {
+                    
+                    bool needsRender = !chunk->isLoaded;
+                    
+#ifdef HAS_CHUNK_MANAGER
+                    if (chunkManager) {
+                        if (ChunkManagerSystem_is_chunk_dirty(chunkManager, chunkX, chunkY)) {
+                            needsRender = true;
+                        }
+                    } else
+#endif
+                    {
+                        if (chunk->isDirty) {
+                            needsRender = true;
+                        }
+                    }
+                    
+                    if (needsRender) {
                         render_chunk_tiles(system, chunk);
+                        chunk->isDirty = false;
                     }
                 }
             }
         }
     }
     
-    // TODO: Unload chunks outside simulation radius of all observers
-    // This would require iterating all chunks and checking distance to nearest observer
+#ifdef HAS_CHUNK_MANAGER
+    if (chunkManager) {
+        ChunkManagerSystem_clear_dirty(chunkManager);
+    }
+#endif
 }
 
 void ChunkRenderSystem_render(ChunkRenderSystem* system,
@@ -320,8 +322,6 @@ void ChunkRenderSystem_render(ChunkRenderSystem* system,
                               AspectFitHandle aspectFit) {
     if (!system || !system->renderer || !camera || !aspectFit) return;
     
-    // Collect all chunks that should be rendered (union of all observer render radii)
-    // Use a table to track which chunks we've already rendered to avoid duplicates
     Table_T renderedChunks = Table_new(128, IntCoord_cmp, IntCoord_hash);
     
     for (size_t i = 0; i < system->observerCount; i++) {
@@ -331,7 +331,6 @@ void ChunkRenderSystem_render(ChunkRenderSystem* system,
         int observerChunkX, observerChunkY;
         get_chunk_coord(system, observerTileX, observerTileY, &observerChunkX, &observerChunkY);
         
-        // Render chunks in render radius
         for (int dy = -system->renderRadius; dy <= system->renderRadius; dy++) {
             for (int dx = -system->renderRadius; dx <= system->renderRadius; dx++) {
                 int chunkX = observerChunkX + dx;
@@ -341,12 +340,10 @@ void ChunkRenderSystem_render(ChunkRenderSystem* system,
                 if (dist <= (float)system->renderRadius) {
                     IntCoord coord = {chunkX, chunkY};
                     
-                    // Check if we've already rendered this chunk
                     if (Table_get(renderedChunks, &coord)) {
                         continue;
                     }
                     
-                    // Mark as rendered
                     IntCoord* key = (IntCoord*)Arena_alloc(system->arena, sizeof(IntCoord), __FILE__, __LINE__);
                     key->x = chunkX;
                     key->y = chunkY;
@@ -354,21 +351,16 @@ void ChunkRenderSystem_render(ChunkRenderSystem* system,
                     
                     ChunkRenderData* chunk = (ChunkRenderData*)Table_get(system->chunks, &coord);
                     if (chunk && chunk->isLoaded) {
-                        // Calculate chunk world position in pixels
                         float chunkWorldX = (float)(chunkX * system->chunkSize * system->tileSize);
                         float chunkWorldY = (float)(chunkY * system->chunkSize * system->tileSize);
                         
-                        // Get screen position using renderer interface
                         RenderVector2 worldPos = {chunkWorldX, chunkWorldY};
                         RenderVector2 screenPos = Renderer_world_to_screen(system->renderer, camera, aspectFit, worldPos);
                         
-                        // Get zoom and scale using renderer interface
                         float zoom = Renderer_get_camera_zoom(system->renderer, camera);
                         float scale = Renderer_get_aspect_fit_scale(system->renderer, aspectFit);
                         
-                        // Render chunk texture using renderer interface
                         float chunkPixelSize = (float)(system->chunkSize * system->tileSize);
-                        // Negative height for flipped Y
                         RenderRect srcRect = {0, 0, chunkPixelSize, -chunkPixelSize};
                         RenderRect dstRect = {
                             screenPos.x,
@@ -377,7 +369,6 @@ void ChunkRenderSystem_render(ChunkRenderSystem* system,
                             chunkPixelSize * zoom * scale
                         };
                         
-                        // Get texture handle from render texture using renderer interface
                         void* textureHandle = Renderer_get_render_texture_texture(system->renderer, chunk->renderTexture);
                         if (textureHandle) {
                             RenderCommand texProCmd = {
@@ -422,11 +413,8 @@ bool ChunkRenderSystem_handle_click(ChunkRenderSystem* system,
                                     int* outTileY) {
     if (!system || !system->renderer || !camera || !aspectFit) return false;
     
-    // Convert screen position to world position using renderer interface
     RenderVector2 world = Renderer_screen_to_world(system->renderer, camera, aspectFit, mousePos);
     
-    // Convert world position to tile coordinates
-    // floorf handles negative coordinates correctly (rounds towards negative infinity)
     int tileX = (int)floorf(world.x / (float)system->tileSize);
     int tileY = (int)floorf(world.y / (float)system->tileSize);
     
@@ -451,10 +439,6 @@ void ChunkRenderSystem_mark_chunk_dirty(ChunkRenderSystem* system, int tileX, in
 
 void ChunkRenderSystem_cleanup(ChunkRenderSystem* system) {
     if (!system) return;
-    
-    // Unload all chunk render textures
-    // Note: Table iteration would be needed to unload all chunks
-    // For now, we'll just mark as not initialized
-    // In a full implementation, we'd iterate the table and unload each texture
 }
+
 
